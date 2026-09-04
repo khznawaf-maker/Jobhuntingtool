@@ -68,12 +68,12 @@ html, body, [class*="css"] { font-family:'Space Grotesk',sans-serif; }
 
 .jobcard{
   border:1px solid #E8EAEE;border-radius:18px;padding:16px 18px;margin-bottom:12px;
-  background:#fff;box-shadow:0 1px 3px rgba(16,24,40,.04);
+  background:#fff;color:#111827;box-shadow:0 1px 3px rgba(16,24,40,.05);
   transition:box-shadow .18s ease, transform .18s ease, border-color .18s ease;
   animation:rise .35s cubic-bezier(.22,1,.36,1) both;
 }
 .jobcard:hover{border-color:#C4B5FD;transform:translateY(-2px);
-  box-shadow:0 8px 24px rgba(124,58,237,.10)}
+  box-shadow:0 8px 24px rgba(124,58,237,.12)}
 @keyframes rise{from{opacity:0;transform:translateY(10px)}
 to{opacity:1;transform:translateY(0)}}
 
@@ -397,16 +397,55 @@ def detect_field(text):
     best = max(sc, key=sc.get)
     return (best, DEGREE_FIELDS[best]) if sc[best] > 0 else (None, [])
 
+
+# ── PDF extraction: try 3 methods, keep the cleanest
+def _fused_ratio(txt):
+    ws = txt.split()
+    if not ws: return 1.0
+    return sum(1 for w in ws if len(w) > 25) / len(ws)
+
+
 def read_upload(f):
     n, data = f.name.lower(), f.read()
-    if n.endswith(".pdf"):
+    if not n.endswith(".pdf"):
+        if n.endswith(".docx"):
+            import docx
+            return "\n".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs)
+        return data.decode("utf-8", errors="ignore")
+
+    cands = []
+    try:                                   # 1 — PyMuPDF, usually best spacing
+        import fitz
+        doc = fitz.open(stream=data, filetype="pdf")
+        cands.append("\n".join(p.get_text(sort=True) for p in doc))
+        doc.close()
+    except Exception:
+        pass
+    try:                                   # 2 — pdfplumber, tight tolerance
         import pdfplumber
         with pdfplumber.open(io.BytesIO(data)) as pdf:
-            return "\n".join((p.extract_text() or "") for p in pdf.pages)
-    if n.endswith(".docx"):
-        import docx
-        return "\n".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs)
-    return data.decode("utf-8", errors="ignore")
+            cands.append("\n".join(
+                (p.extract_text(x_tolerance=1.2, y_tolerance=3) or "")
+                for p in pdf.pages))
+    except Exception:
+        pass
+    try:                                   # 3 — rebuild from word boxes
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            out = []
+            for p in pdf.pages:
+                lines = {}
+                for w in p.extract_words(x_tolerance=1.2):
+                    lines.setdefault(round(w["top"]/3), []).append((w["x0"], w["text"]))
+                out.append("\n".join(" ".join(t for _,t in sorted(v))
+                                     for _,v in sorted(lines.items())))
+            cands.append("\n".join(out))
+    except Exception:
+        pass
+
+    cands = [c for c in cands if c and c.strip()]
+    if not cands: return ""
+    return min(cands, key=lambda c: (_fused_ratio(c), -len(c)))
 
 
 SECTION_HEADS = ["education","skills","technical skills","soft skills",
@@ -457,7 +496,7 @@ def build_cv_profile(text):
         for g in _ngrams(chunk):
             if g in SKILL_VOCAB:
                 prof[g] = max(prof.get(g,0), base+8)
-            elif " " not in g and len(g) >= 4 \
+            elif " " not in g and 4 <= len(g) <= 24 \
                  and g not in NOISE and g not in STOPWORDS:
                 prof[g] = max(prof.get(g,0), base)
 
@@ -465,7 +504,7 @@ def build_cv_profile(text):
                  S.get("soft skills",[])):
         for part in re.split(r"[,\u2022•|/]", line):
             p = part.strip().lower()
-            if 2 < len(p) < 45 and p not in NOISE:
+            if 2 < len(p) < 45 and p not in NOISE and len(p.split()) <= 5:
                 prof[p] = 10
                 for g in _ngrams(p):
                     if g in SKILL_VOCAB: prof[g] = 12
@@ -591,7 +630,6 @@ SF_HINT = re.compile(r"locale=en_|/search|successfactors|rmkcdn|hr\.cloud\.sap",
 
 
 def fetch_site_browser(entities, progress=None):
-    """Render each careers page in a real browser and scrape job titles."""
     from playwright.sync_api import sync_playwright
 
     jobs_by_name, dead = {}, []
@@ -710,7 +748,6 @@ def score(job, prof, entry_only, field_kws):
 
     if not desc and pts:
         pts = int(pts * 1.8)
-
     if entry_only and any(m in tl for m in JUNIOR): pts += 25
 
     hits = sorted(set(hits), key=len, reverse=True)
@@ -725,11 +762,9 @@ def _embedder():
 
 
 def semantic_rerank(jobs, cv_text, weight=60):
-    """Blend keyword score with CV↔job meaning similarity. Local, no API."""
     if not jobs or not cv_text:
         return jobs
     from sentence_transformers import util
-
     m = _embedder()
     cv_vec = m.encode(cv_text[:4000], convert_to_tensor=True,
                       normalize_embeddings=True)
@@ -1041,9 +1076,13 @@ with t_search:
                 st.session_state["cv_text"] = cv_text
                 profile, label = build_cv_profile(cv_text), "cv"
                 field, field_kws = detect_field(cv_text)
+                fr = _fused_ratio(cv_text)
                 st.success(f"Parsed {len(cv_text):,} chars")
+                if fr > 0.02:
+                    st.warning("Some words look fused together in this PDF. "
+                               "Matching may be weaker — a .docx version works better.")
                 if field:
-                    st.info(f"Field: **{field.title()}** — matching jobs get +20")
+                    st.info(f"Field: **{field.title()}**")
                 st.markdown("".join(f'<span class="badge b-blue">{k}</span>'
                             for k in list(profile)[:12]), unsafe_allow_html=True)
         with m2:
@@ -1075,7 +1114,6 @@ with t_search:
         results, dead, notes = [], [], []
         bar, status = st.progress(0.0), st.empty()
 
-        # ---- startup ATS APIs
         if use_private:
             if not employers_ats:
                 status.info("First run — probing ATS APIs. Go sort some balls.")
@@ -1103,7 +1141,6 @@ with t_search:
                             results.append(j)
                 bar.progress(0.25+(i+1)/max(len(items),1)*0.1)
 
-        # ---- gov + employers
         targets = []
         if use_gov: targets += [("GOV",n,u) for n,u in GOV_ENTITIES.items()]
         if use_emp: targets += [("EMP",n,u) for n,u in EMPLOYERS.items()]
@@ -1161,7 +1198,6 @@ with t_search:
                     results.append(j)
             bar.progress(0.87)
 
-        # ---- aggregators
         if use_boards:
             status.write("🔍 Indeed + Bayt…")
             jobs,err = fetch_jobspy(list(profile)[0], chosen or ["Riyadh"], all_saudi)
@@ -1176,13 +1212,11 @@ with t_search:
 
         save_cache(jobcache)
 
-        # ---- dedupe
         seen,uniq=set(),[]
         for j in sorted(results,key=lambda x:-x["score"]):
             key=(j["title"].lower(), j.get("company",""))
             if key not in seen: seen.add(key); uniq.append(j)
 
-        # ---- semantic re-rank
         if use_semantic and label == "cv" and st.session_state.get("cv_text"):
             try:
                 status.write("🧠 Re-ranking by meaning…")
@@ -1190,22 +1224,19 @@ with t_search:
             except Exception as e:
                 notes.append(f"Semantic re-rank skipped: {e}")
 
-        # ---- new-since-last-run
         seen_db = _load(SEENFILE, {})
         now_iso = datetime.now().isoformat()
         n_new = 0
         for j in uniq:
             k = job_key(j)
             if k in seen_db:
-                j["is_new"] = False
-                j["first_seen"] = seen_db[k]
+                j["is_new"] = False; j["first_seen"] = seen_db[k]
             else:
                 j["is_new"] = True; j["first_seen"] = now_iso; n_new += 1
             seen_db[k] = j["first_seen"]
         _save(SEENFILE, seen_db)
 
         bar.progress(1.0); status.empty()
-
         shown = [j for j in uniq if j["is_new"]] if only_new else uniq
 
         c1,c2,c3 = st.columns(3)
@@ -1228,37 +1259,36 @@ with t_search:
                             for m in j.get("matched",[]))
             gapline = ""
             if j.get("gaps"):
-                total = len(j["matched"]) + len(j["gaps"])
-                gapline = (f'<div style="margin-top:8px;font-size:.8rem;color:#6B7280">'
-                           f'Matches {len(j["matched"])} of {total} key skills · '
-                           f'missing: ' +
+                total = len(j.get("matched",[])) + len(j["gaps"])
+                gapline = ('<div style="margin-top:8px;font-size:.8rem;color:#6B7280">'
+                           f'Matches {len(j.get("matched",[]))} of {total} key skills'
+                           ' · missing: ' +
                            " ".join(f'<span class="badge b-red">{g}</span>'
                                     for g in j["gaps"]) + '</div>')
             fit = int(j.get("sim",0)*100)
-            fitbar = (f'<div class="fitbar"><div class="fitfill" '
-                      f'style="width:{fit}%"></div></div>'
-                      f'<div style="font-size:.7rem;color:#9CA3AF;margin-top:3px">'
-                      f'{fit}% semantic fit</div>') if j.get("sim") else ''
+            fitbar = (f'<div class="fitbar"><div class="fitfill" style="width:{fit}%">'
+                      f'</div></div><div style="font-size:.7rem;color:#9CA3AF;'
+                      f'margin-top:3px">{fit}% semantic fit</div>') if j.get("sim") else ''
 
-            st.markdown(f"""<div class="jobcard">
-              <div style="display:flex;justify-content:space-between;gap:12px">
-                <div style="flex:1">
-                  <div style="font-size:1.08rem;font-weight:700;line-height:1.3">
-                    {j['title']} {newbadge}</div>
-                  <div style="color:#6B7280;font-size:.84rem;margin:4px 0 8px">
-                    {j.get('company','')} · {j.get('location') or 'location n/a'}
-                    <span class="badge {bd}">{j.get('src','')}</span> {posted}</div>
-                  {chips}{gapline}</div>
-                <div style="text-align:right;min-width:66px">
-                  <div style="font-size:1.5rem;font-weight:700;color:#A855F7">
-                    {j['score']}</div>
-                  <div style="font-size:.66rem;color:#9CA3AF">score</div></div>
-              </div>
-              {fitbar}
-              <div style="margin-top:10px"><a href="{j['url']}" target="_blank"
-                style="font-weight:600;color:#3B82F6;text-decoration:none">
-                open posting ↗</a></div>
-            </div>""", unsafe_allow_html=True)
+            card = (
+f'<div class="jobcard">'
+f'<div style="display:flex;justify-content:space-between;gap:12px">'
+f'<div style="flex:1">'
+f'<div style="font-size:1.08rem;font-weight:700;line-height:1.3;color:#111827">'
+f'{j["title"]} {newbadge}</div>'
+f'<div style="color:#6B7280;font-size:.84rem;margin:4px 0 8px">'
+f'{j.get("company","")} · {j.get("location") or "location n/a"} '
+f'<span class="badge {bd}">{j.get("src","")}</span> {posted}</div>'
+f'{chips}{gapline}</div>'
+f'<div style="text-align:right;min-width:66px">'
+f'<div style="font-size:1.5rem;font-weight:700;color:#A855F7">{j["score"]}</div>'
+f'<div style="font-size:.66rem;color:#9CA3AF">score</div></div>'
+f'</div>{fitbar}'
+f'<div style="margin-top:10px"><a href="{j["url"]}" target="_blank" '
+f'style="font-weight:600;color:#3B82F6;text-decoration:none">open posting ↗</a></div>'
+f'</div>'
+            )
+            st.markdown(card, unsafe_allow_html=True)
 
         if shown:
             import csv as _csv
@@ -1313,7 +1343,10 @@ with t_cv:
         if u2:
             st.session_state["cv_text"] = read_upload(u2)
         text = st.session_state.get("cv_text","")
-        if text: st.success(f"Loaded — {len(text):,} chars")
+        if text:
+            st.success(f"Loaded — {len(text):,} chars")
+            if _fused_ratio(text) > 0.02:
+                st.warning("Words look fused in this PDF — a .docx works better.")
     with c2:
         target_jd = st.text_area("Paste the job description you're applying to",
                                  height=190, key="tjd")
@@ -1398,11 +1431,11 @@ with t_track:
                     st.caption(f"{a['company']} · applied {a['date']}")
                     if a.get("url"): st.link_button("Open posting", a["url"])
                 with c2:
+                    cur = a.get("status","Applied")
                     ns = st.selectbox("Status", STATUSES,
-                        index=STATUSES.index(a.get("status","Applied"))
-                              if a.get("status","Applied") in STATUSES else 0,
+                        index=STATUSES.index(cur) if cur in STATUSES else 0,
                         key=f"st{i}", label_visibility="collapsed")
-                    if ns != a.get("status"): a["status"]=ns; changed=True
+                    if ns != cur: a["status"]=ns; changed=True
                     nn = st.text_input("Notes", a.get("notes",""),
                         key=f"nt{i}", placeholder="notes…",
                         label_visibility="collapsed")
