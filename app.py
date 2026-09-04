@@ -6,6 +6,7 @@ Run:  python -m streamlit run app.py
 import base64, io, json, os, random, re, time
 from collections import Counter
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 import requests
 import streamlit as st
@@ -16,6 +17,8 @@ st.set_page_config(page_title="Luluty Job Hunting Tool", page_icon="🐸", layou
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "employers.json")
 JOBCACHE = os.path.join(HERE, "jobcache.json")
+SEENFILE = os.path.join(HERE, "seen_jobs.json")
+TRACKFILE = os.path.join(HERE, "applications.json")
 
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -32,40 +35,74 @@ HYPE = [
     "Taibah's finest 🎓", "You got this, habibti 💅", "Keep cooking Luluty 🔥",
     "Your CV is about to eat 😤", "Recruiters aren't ready 💫",
     "Smartest girl in Medina 🧠", "One click closer 💼",
+    "SQL queen behaviour 👑", "They'd be lucky to have you 🍀",
+    "Certified problem solver 🛠️", "Big Riyadh energy 🏙️",
+    "That degree is paying off 📜", "Built different, honestly 💎",
+    "Every application is practice 🎯", "Slow progress is still progress 🌱",
+    "You're closer than you think 🚀", "Nobody works harder 💪",
+    "Confidence looks good on you 😌", "Rejections are redirections ↩️",
+    "Your future boss is scrolling 👀", "Databases fear you 🗄️",
+    "The offer is coming, be patient ⏳", "Proud of you, always 🤍",
+    "Go get it, Luluty 🏆", "You already did the hard part 🌟",
+    "Talent + patience = offer 🧮", "Backing you 100% 🫶",
 ]
 
 # ═══════════════════════════════════════ style
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family:'Space Grotesk',sans-serif; }
+#MainMenu, footer {visibility:hidden}
+.block-container{padding-top:2rem}
+
 .hero{
   background:linear-gradient(135deg,#6EE7B7 0%,#3B82F6 40%,#A855F7 75%,#EC4899 100%);
-  background-size:300% 300%; animation:flow 9s ease infinite;
+  background-size:300% 300%; animation:flow 11s ease infinite;
   border-radius:26px; padding:22px 28px; margin-bottom:6px;
-  box-shadow:0 12px 34px rgba(168,85,247,.34);
+  box-shadow:0 12px 34px rgba(168,85,247,.30);
 }
 @keyframes flow{0%{background-position:0% 50%}50%{background-position:100% 50%}
 100%{background-position:0% 50%}}
 .hero h1{color:#fff;margin:0;font-size:2.3rem;letter-spacing:-1.4px}
 .hero p{color:#F0FDF4;margin:5px 0 0;font-size:.95rem}
-.jobcard{border:2px solid #E5E7EB;border-radius:18px;padding:15px 18px;
-  margin-bottom:11px;background:#fff;transition:.15s}
-.jobcard:hover{border-color:#A855F7;transform:translateY(-2px)}
+
+.jobcard{
+  border:1px solid #E8EAEE;border-radius:18px;padding:16px 18px;margin-bottom:12px;
+  background:#fff;box-shadow:0 1px 3px rgba(16,24,40,.04);
+  transition:box-shadow .18s ease, transform .18s ease, border-color .18s ease;
+  animation:rise .35s cubic-bezier(.22,1,.36,1) both;
+}
+.jobcard:hover{border-color:#C4B5FD;transform:translateY(-2px);
+  box-shadow:0 8px 24px rgba(124,58,237,.10)}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}
+to{opacity:1;transform:translateY(0)}}
+
 .badge{display:inline-block;padding:3px 11px;border-radius:999px;
-  font-size:.71rem;font-weight:700;margin:2px 4px 2px 0}
+  font-size:.71rem;font-weight:600;margin:2px 4px 2px 0;letter-spacing:.1px}
 .b-green{background:#DCFCE7;color:#166534}
 .b-blue{background:#DBEAFE;color:#1E40AF}
 .b-pink{background:#FCE7F3;color:#9D174D}
-.b-gray{background:#F3F4F6;color:#374151}
+.b-gray{background:#F3F4F6;color:#4B5563}
 .b-amber{background:#FEF3C7;color:#92400E}
+.b-red{background:#FEE2E2;color:#991B1B}
+.b-new{background:linear-gradient(90deg,#FBBF24,#F59E0B);color:#fff;
+  box-shadow:0 2px 6px rgba(245,158,11,.35)}
+
+.fitbar{height:6px;border-radius:999px;background:#F1F1F4;overflow:hidden;
+  margin-top:9px}
+.fitfill{height:100%;border-radius:999px;
+  background:linear-gradient(90deg,#6EE7B7,#3B82F6,#A855F7);
+  animation:grow .7s cubic-bezier(.22,1,.36,1) both}
+@keyframes grow{from{width:0}}
+
 .stButton>button{border-radius:14px;font-weight:700;border:2px solid #111;
-  box-shadow:3px 3px 0 #111}
+  box-shadow:3px 3px 0 #111;transition:.12s}
 .stButton>button:hover{transform:translate(1px,1px);box-shadow:2px 2px 0 #111}
+.stTabs [data-baseweb="tab"]{font-weight:600}
+div[data-testid="stExpander"]{border-radius:14px;border:1px solid #E8EAEE}
 </style>
 """, unsafe_allow_html=True)
 
-# ── header GIF (falls back to emoji if frog.gif is missing)
 try:
     _g = base64.b64encode(open(os.path.join(HERE, "frog.gif"), "rb").read()).decode()
     FROG = f'<img src="data:image/gif;base64,{_g}" width="66" style="border-radius:14px">'
@@ -78,19 +115,24 @@ st.markdown(f"""
 <p>scrape · match · fix the CV · sort some balls 🫧</p></div></div></div>
 """, unsafe_allow_html=True)
 
-# ── live rotating encouragement
 _hype_js = json.dumps(HYPE)
 components.html(f"""
 <div id="hb" style="text-align:center;font-family:'Space Grotesk',system-ui;
  font-size:1.24rem;font-weight:700;padding:12px;background:#FFF1F7;
  border:2px dashed #EC4899;border-radius:18px;color:#9D174D;
- transition:opacity .45s">{HYPE[0]}</div>
+ transition:opacity .6s ease">{HYPE[0]}</div>
 <script>
-const H={_hype_js};let i=0;const el=document.getElementById('hb');
+const H={_hype_js};let seen=[];const el=document.getElementById('hb');
+function pick(){{
+  let i;
+  do {{ i=Math.floor(Math.random()*H.length); }} while(seen.includes(i)&&seen.length<H.length);
+  seen.push(i); if(seen.length>8) seen.shift();
+  return H[i];
+}}
 setInterval(()=>{{
   el.style.opacity=0;
-  setTimeout(()=>{{i=(i+1)%H.length;el.textContent=H[i];el.style.opacity=1;}},450);
-}},5800);
+  setTimeout(()=>{{el.textContent=pick();el.style.opacity=1;}},600);
+}},8000);
 </script>
 """, height=70)
 
@@ -109,12 +151,11 @@ SAUDI_CITIES = {
 SAUDI_GENERIC = ["saudi","ksa","k.s.a","السعودية","المملكة"]
 
 CANDIDATE_SLUGS = [
-    "tabby","tamara","foodics","salla","unifonic","lean","nana","jahez","zid",
-    "hyperpay","geidea","mrsool","sary","neom","redseaglobal","roshn","qiddiya",
-    "diriyah","pif","alula","careem","noon","talabat","kitopi","bayut",
+    "tabby","foodics","salla","careem","bayut","qiddiya-investment-company-1",
+    "zaintech","neom","redseaglobal","roshn","noon","kitopi","talabat",
     "accenture","deloitte","sap","oracle","cisco","ericsson","nokia","siemens",
     "schneiderelectric","honeywell","ibm","databricks","snowflake","palantir",
-    "servicenow","mongodb","elastic","gitlab","cyberani","zenhr","alinma",
+    "servicenow","mongodb","elastic","gitlab",
 ]
 PROBES = {
     "lever":"https://api.lever.co/v0/postings/{s}?mode=json",
@@ -124,27 +165,133 @@ PROBES = {
     "workable":"https://apply.workable.com/api/v1/widget/accounts/{s}",
     "smartr":"https://api.smartrecruiters.com/v1/companies/{s}/postings",
 }
+
 GOV_ENTITIES = {
-    "ZATCA":"https://zatca.gov.sa/en/Careers/Pages/default.aspx",
-    "SDAIA":"https://sdaia.gov.sa/en/Contact/Pages/JoinUs.aspx",
-    "SAMA":"https://www.sama.gov.sa/en-US/Careers/Pages/default.aspx",
-    "GOSI":"https://www.gosi.gov.sa/en/Careers",
-    "Monsha'at":"https://www.monshaat.gov.sa/en/careers",
-    "CMA":"https://cma.org.sa/en/AboutUs/Careers/Pages/default.aspx",
-    "GASTAT":"https://www.stats.gov.sa/en/careers",
-    "DGA":"https://dga.gov.sa/en/careers",
-    "NCA":"https://nca.gov.sa/en/careers/",
-    "SFDA":"https://www.sfda.gov.sa/en/careers",
-    "Saudi Post SPL":"https://splonline.com.sa/en/careers/",
-    "KAUST":"https://www.kaust.edu.sa/en/careers",
+    "GACA":"https://careers.gaca.gov.sa/",
+    "ZATCA":"https://careers.zatca.gov.sa/?locale=en_GB",
+    "SDAIA":"https://careers.sdaia.gov.sa/",
+    "GASTAT":"https://careers.stats.gov.sa/en/",
+    "SAMA":"https://careers.sama.gov.sa/en/",
+    "CMA":"https://careers.cma.gov.sa/",
+    "Ministry of Commerce":"https://talent.mc.gov.sa/en/",
+    "MCIT":"https://careers.mcit.gov.sa/",
+    "Ministry of Sport":"https://careers.mos.gov.sa/",
+    "Ministry of Culture":"https://careers.moc.gov.sa/?locale=en_GB",
+    "MISA":"https://jobs.misa.gov.sa/",
+    "MODON":"https://careers.modon.gov.sa/",
+    "NCEC":"https://careers.ncec.gov.sa/",
+    "NCVC":"https://careers.ncvc.gov.sa/",
+    "NCM":"https://careers.ncm.gov.sa/",
+    "Mawani":"https://careers.mawani.gov.sa/",
+    "RGA":"https://careers.rga.gov.sa/",
+    "GAMI":"https://jobs.gami.gov.sa/?locale=en_US",
+    "Awqaf":"https://careers.awqaf.gov.sa/",
+    "Saudi Space Agency":"https://ssa.gov.sa/en/careersLandingPage?path=%2Fcareers%2F",
+    "SAIP":"https://www.saip.gov.sa/ar/contact-us/careers",
+    "SFD":"https://careers.sfd.gov.sa/",
     "SIDF":"https://www.sidf.gov.sa/en/Careers",
-    "Saudi EXIM":"https://saudiexim.gov.sa/en/careers",
-    "MISA":"https://misa.gov.sa/en/careers/",
-    "RCRC":"https://www.rcrc.gov.sa/en/careers",
-    "Elm":"https://elm.sa/en/careers",
-    "NDMC":"https://www.ndmc.gov.sa/en/careers",
-    "TGA":"https://tga.gov.sa/en/careers",
-    "Mawani":"https://mawani.gov.sa/en/careers",
+    "National Infrastructure Fund":"https://careers.infra.gov.sa/",
+    "RCU AlUla":"https://www.rcu.gov.sa/en/contact/careers",
+    "Infath":"https://infath.gov.sa/en/careers/",
+    "NCGR":"https://ncgr.gov.sa/ar/employment",
+    "CHI":"https://careers.chi.gov.sa/",
+    "Sharqia Dev Authority":"https://www.sda.gov.sa/join-us?ltr=true",
+    "National Events Center":"https://nec.gov.sa/en/join-us",
+    "Dulani":"https://www.dulani.gov.sa/en/join-us",
+    "GEOSA":"https://geosa.gov.sa/en/EService/pages/recruitment/jobvacancies.aspx",
+    "GAFT":"https://gaft.gov.sa/employment-and-training/employment",
+    "LCGPA":"https://careers.lcgpa.gov.sa/",
+    "Ministry of Health":"https://www.moh.gov.sa/eservices/cards/pages/alljobs.aspx",
+    "Pilgrim Experience Program":"https://careers.pep.gov.sa/ar/",
+    "NELC":"https://nelc.gov.sa/en/careers",
+    "Shared Services Program":"https://ssp.gov.sa/Recruitements.aspx",
+    "Environment Fund":"https://www.ef.gov.sa/en/Pages/join-us.aspx",
+    "Taqeem":"https://www.taqeem.gov.sa/jobs",
+    "NHIC":"https://nhic.gov.sa/Jobs",
+    "RCJY":"https://careers.rcjy.gov.sa/en/",
+    "Saudi Tourism Authority":"https://sta.gov.sa/en/main-career-page",
+    "Public Health Authority":"https://www.pha.gov.sa/en-us/Pages/joinUS.aspx",
+    "SFDA":"https://www.sfda.gov.sa/en/career-vision-and-mission",
+    "DGA":"https://career.dga.gov.sa/",
+    "GAC":"https://gac.mihnati.com/EN/",
+}
+
+EMPLOYERS = {
+    "Saudi Aramco":"https://careers.aramco.com/",
+    "stc group":"https://careers.stc.com.sa/",
+    "Maaden":"https://careers.maaden.com/gb/en",
+    "SABIC":"https://jobs.sabic.com/",
+    "PIF":"https://www.pif.gov.sa/en/careers/",
+    "Al Rajhi Bank":"https://careers.alrajhibank.com.sa/",
+    "SNB":"https://www.alahli.com.sa/en/pages/about-us/careers",
+    "ACWA Power":"https://careers.acwapower.com/job/",
+    "NEOM":"https://www.neom.com/en-us/be-part-of-neom/work-at-neom",
+    "Elm":"https://career.elm.sa/elm/",
+    "Dr Sulaiman Al Habib":"https://talents.hmg.com/?langcode=en",
+    "Saudi Electricity":"https://www.se.com.sa/Careers",
+    "Riyad Bank":"https://careers.riyadbank.com/",
+    "SAB":"https://careers.sab.com/",
+    "Alinma Bank":"https://career.alinma.com/",
+    "Mobily":"https://www.mobily.com.sa/wps/portal/web/careers",
+    "ROSHN":"https://www.roshn.sa/ar/careers",
+    "Red Sea Global":"https://careers.theredsea.sa/",
+    "Qiddiya":"https://qiddiya.com/careers/",
+    "Diriyah Company":"https://www.diriyahcompany.sa/en/careers",
+    "Riyadh Air":"https://www.riyadhair.com/en/careers",
+    "New Murabba":"https://newmurabba.com/careers",
+    "Saudia":"https://careers.saudia.com/",
+    "SAMI":"https://sami.jobs.hr.cloud.sap/",
+    "SAMI Advanced Electronics":"https://www.aecl.com/en/jobs/",
+    "Tadawul Group":"https://careers.tadawulgroup.sa/?lang=en",
+    "solutions by stc":"https://solutions.com.sa/careers/",
+    "Bahri":"https://www.bahri.sa/en/careers/",
+    "Arab National Bank":"https://careers.anb.com.sa/",
+    "Banque Saudi Fransi":"https://www.bsfcareers.sa/",
+    "Bank Albilad":"https://www.bankalbilad.com.sa/en/about/pages/e-careers.aspx",
+    "SAIB":"https://careers.saib.com.sa/en/",
+    "Almarai":"https://www.almarai.com/en/careers/",
+    "Bupa Arabia":"https://careers.bupa.com.sa/",
+    "Tawuniya":"https://www.tawuniya.com/en/careers",
+    "Jarir":"https://jobapp.jarir.com/?lang=sa",
+    "Matarat Holding":"https://careers.matarat.com.sa/",
+    "flynas":"https://career.flynas.com/",
+    "SEVEN":"https://careers.seven.sa/?locale=en_GB",
+    "Cruise Saudi":"https://career.cruisesaudi.com/",
+    "Soudah Development":"https://soudah.sa/en/work-with-us",
+    "Alshaya Group":"https://www.alshaya.com/sa/english/careers/",
+    "Chalhoub Group":"https://careers.chalhoubgroup.com/jobs",
+    "Apparel Group":"https://www.apparelgroup.com/en/careers/",
+    "DP World Saudi":"https://www.dpworld.sa/careers",
+    "Budget Saudi":"https://www.budgetsaudi.com/en/careers",
+    "Dar Al Riyadh":"https://careers.daralriyadh.com/",
+    "Nesma & Partners":"https://www.nesmapartners.com/en/careers",
+    "AJEX Logistics":"https://www.aj-ex.com/careers",
+    "Salehiya Healthcare":"https://salehiya.com/careers/",
+    "Tamkeen Technologies":"https://tamkeentech.sa/careers",
+    "Tabuk Pharmaceuticals":"https://careers.tabukpharmaceuticals.com/",
+    "Saudi German Health":"https://career.saudigermanhealth.com/",
+    "Hikma":"https://www.hikma.com/careers/",
+    "Coca-Cola Saudi":"https://www.coca-cola.com.sa/careers/",
+    "SPIMACO":"https://careers.spimaco.com.sa/",
+    "Al-Dawaa Pharmacies":"https://careers.al-dawaa.com/",
+    "Mouwasat":"https://www.mouwasat.com/en/careers",
+    "Dallah Health":"https://careers.dallahhealth.com/",
+    "Panda Retail":"https://careers.panda.com.sa/en/",
+    "Al Othaim Markets":"https://recruitment.othaimmarkets.com/",
+    "Zahid Group":"https://careers.zahid.com/",
+    "alfanar":"https://jobs.alfanar.com/alfanar/go/All-Openings/4442101/?location=saudi+arabia",
+    "AtkinsRealis":"https://careers.atkinsrealis.com/en/global-locations/middle-east/saudi-arabia",
+    "Accenture":"https://www.accenture.com/sa-en/careers",
+    "BCG":"https://careers.bcg.com/global/en/locations/saudi-arabia",
+    "EY Saudi":"https://www.ey.com/en_sa/careers",
+    "KPMG Saudi":"https://kpmg.com/sa/en/careers.html",
+    "SAP":"https://jobs.sap.com/go/Saudi-Arabia/9009201/",
+    "Cisco":"https://careers.cisco.com/global/en/saudi-arabia?from=0&s=1",
+    "IBM":"https://www.ibm.com/careers/search?field_keyword_05%5B0%5D=Saudi+Arabia",
+    "Ericsson":"https://jobs.ericsson.com/careers?location=Saudi+Arabia&page=1",
+    "Schneider Electric":"https://careers.se.com/saudi-arabia",
+    "Zain":"https://careers.zain.com/",
+    "Landmark Group":"https://efhi.fa.em3.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs",
 }
 
 STOPWORDS = set("""
@@ -157,6 +304,36 @@ year years month months day days work working works experience skills team teams
 role responsibilities requirements ability strong good excellent using use used
 new job company across within including etc via per able support
 """.split())
+
+NOISE = set("""
+saudi arabia arabian ksa riyadh jeddah medina medinah mecca makkah dammam khobar
+january february march april june july august september october november december
+jan feb mar apr jun jul aug sep sept oct nov dec
+university college bachelor science degree gpa graduated school institute academy
+taibah king abdulaziz faisal saud fahd prince princess
+gmail hotmail outlook yahoo email phone mobile address linkedin github
+present current date period duration company ltd llc inc corp group holding
+""".split())
+
+SKILL_VOCAB = {
+    "sql","mysql","postgresql","sql server","ssms","ssis","ssrs","t-sql",
+    "power bi","tableau","looker","qlik","excel","vba","dax","power query",
+    "python","pandas","numpy","spss","sas",
+    "data analysis","data analytics","data validation","data quality","data entry",
+    "etl","data warehouse","data modeling","reporting","dashboard","dashboards",
+    "kpi","visualization","statistics","forecasting",
+    "database","databases","dba","backup","indexing","query optimization",
+    "performance tuning","availability groups","stored procedures","execution plans",
+    "active directory","exchange server","windows server","linux","powershell",
+    "ticketing","service desk","itil","incident","troubleshooting","help desk",
+    "networking","dns","dhcp","vpn","firewall",
+    "cybersecurity","endpoint security","threat","siem","vulnerability","compliance",
+    "erp","sap","oracle","crm","sharepoint","jira",
+    "business analysis","requirements","documentation","process improvement",
+    "stakeholder","workflow","gap analysis","quality assurance","quality control",
+    "audit","inventory","procurement","project management","agile","scrum",
+    "coordination","logistics","operations","customer support","training",
+}
 
 SENIOR = ["senior","sr.","staff ","principal","lead ","head of","manager",
           "director","vp ","chief","architect","expert","10+","8+ years"," iii"]
@@ -183,6 +360,7 @@ WEAK_VERBS = {
 }
 
 
+# ═══════════════════════════════════════ text utils
 def tokens(t):
     ws = re.findall(r"[a-zA-Z][a-zA-Z+#.\-]{1,}", (t or "").lower())
     return [w.strip(".-") for w in ws if w not in STOPWORDS and len(w) > 2]
@@ -193,6 +371,17 @@ def strip_html(s):
     for a,b in [("&amp;","&"),("&nbsp;"," "),("&#39;","'"),("&quot;",'"')]:
         s = s.replace(a,b)
     return re.sub(r"\s+"," ", s).strip()
+
+def _ngrams(text, n=3):
+    ws = re.findall(r"[a-zA-Z][a-zA-Z+#.\-]{1,}", (text or "").lower())
+    out = []
+    for size in range(1, n+1):
+        for i in range(len(ws)-size+1):
+            out.append(" ".join(ws[i:i+size]))
+    return out
+
+def _has(term, hay):
+    return re.search(r"(?<![a-z])"+re.escape(term)+r"(?![a-z])", hay) is not None
 
 def build_profile(text, top_n=60):
     ws = tokens(text)
@@ -220,155 +409,6 @@ def read_upload(f):
     return data.decode("utf-8", errors="ignore")
 
 
-# ═══════════════════════════════════════ polite fetching
-def polite_sleep(): time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
-
-def get(url, timeout=20):
-    try:
-        r = requests.get(url, timeout=timeout, headers=UA)
-        if r.status_code == 429:
-            time.sleep(60); return None
-        return r if r.status_code == 200 else None
-    except requests.RequestException:
-        return None
-
-def load_cache():
-    if os.path.exists(JOBCACHE):
-        try: return json.load(open(JOBCACHE, encoding="utf-8"))
-        except Exception: pass
-    return {}
-
-def save_cache(c):
-    try: json.dump(c, open(JOBCACHE,"w",encoding="utf-8"))
-    except Exception: pass
-
-def cache_fresh(e):
-    try:
-        return datetime.now()-datetime.fromisoformat(e["ts"]) < timedelta(hours=CACHE_HOURS)
-    except Exception:
-        return False
-
-def probe(slug):
-    for ats,tpl in PROBES.items():
-        r = get(tpl.format(s=slug), timeout=10)
-        if r:
-            try: d = r.json()
-            except Exception: continue
-            if isinstance(d,list) and d: return ats
-            if isinstance(d,dict):
-                for k in ("jobs","offers","content","results"):
-                    if d.get(k): return ats
-        time.sleep(0.4)
-    return None
-
-def fetch_ats(slug, ats):
-    out = []
-    try:
-        if ats=="lever":
-            r=get(f"https://api.lever.co/v0/postings/{slug}?mode=json")
-            for j in (r.json() if r else []):
-                out.append({"title":j.get("text",""),
-                    "location":(j.get("categories") or {}).get("location",""),
-                    "url":j.get("hostedUrl",""),
-                    "desc":strip_html(j.get("descriptionPlain") or "")})
-        elif ats=="greenhouse":
-            r=get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true")
-            for j in (r.json().get("jobs",[]) if r else []):
-                out.append({"title":j.get("title",""),
-                    "location":(j.get("location") or {}).get("name",""),
-                    "url":j.get("absolute_url",""),
-                    "desc":strip_html(j.get("content",""))})
-        elif ats=="ashby":
-            r=get(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
-            for j in (r.json().get("jobs",[]) if r else []):
-                out.append({"title":j.get("title",""),"location":j.get("location",""),
-                    "url":j.get("jobUrl",""),
-                    "desc":strip_html(j.get("descriptionPlain",""))})
-        elif ats=="recruitee":
-            r=get(f"https://{slug}.recruitee.com/api/offers/")
-            for j in (r.json().get("offers",[]) if r else []):
-                out.append({"title":j.get("title",""),"location":j.get("location",""),
-                    "url":j.get("careers_url",""),
-                    "desc":strip_html(j.get("description",""))})
-        elif ats=="workable":
-            r=get(f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true")
-            for j in (r.json().get("jobs",[]) if r else []):
-                out.append({"title":j.get("title",""),
-                    "location":j.get("location") or j.get("city",""),
-                    "url":j.get("url",""),"desc":strip_html(j.get("description",""))})
-        elif ats=="smartr":
-            r=get(f"https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100")
-            for j in (r.json().get("content",[]) if r else []):
-                loc=j.get("location") or {}
-                out.append({"title":j.get("name",""),
-                    "location":f"{loc.get('city','')} {loc.get('country','')}".strip(),
-                    "url":j.get("ref") or j.get("applyUrl",""),"desc":""})
-    except Exception:
-        pass
-    for j in out: j["company"]=slug
-    return out
-
-JOB_WORD = re.compile(r"(analyst|engineer|specialist|officer|developer|consultant|"
-    r"coordinator|administrator|architect|scientist|technician|associate|intern|"
-    r"trainee|graduate|advisor|auditor|designer|researcher)", re.I)
-
-def fetch_gov(name, url):
-    r = get(url)
-    if not r: return []
-    out, seen = [], set()
-    for c in re.findall(r"<(?:a|li|h[2-4])[^>]*>(.*?)</(?:a|li|h[2-4])>",
-                        r.text, flags=re.S|re.I):
-        t = strip_html(c)
-        if 6 < len(t) < 90 and JOB_WORD.search(t) and t.lower() not in seen:
-            seen.add(t.lower())
-            out.append({"title":t,"location":"Saudi Arabia","url":url,
-                        "desc":"","company":name})
-    return out[:40]
-
-def fetch_jobspy(term, cities, all_saudi):
-    try:
-        from jobspy import scrape_jobs
-    except ImportError:
-        return [], "JobSpy not installed — run: pip install -U python-jobspy"
-    loc = "Saudi Arabia" if all_saudi else f"{cities[0]}, Saudi Arabia"
-    try:
-        df = scrape_jobs(site_name=["indeed","bayt"], search_term=term,
-                         location=loc, results_wanted=25, hours_old=168,
-                         country_indeed="Saudi Arabia")
-        return [{"title":str(r.get("title") or ""),
-                 "location":str(r.get("location") or ""),
-                 "url":str(r.get("job_url") or ""),
-                 "desc":str(r.get("description") or "")[:4000],
-                 "company":str(r.get("company") or "board")}
-                for _,r in df.iterrows()], None
-    except Exception as e:
-        return [], f"JobSpy error: {e}"
-
-
-def loc_ok(loc, chosen, all_saudi, keep_blank):
-    l = (loc or "").lower().strip()
-    if not l: return keep_blank
-    if all_saudi:
-        return (any(g in l for g in SAUDI_GENERIC)
-                or any(k in l for c in SAUDI_CITIES.values() for k in c))
-    return any(k in l for city in chosen for k in SAUDI_CITIES[city])
-
-def score(job, prof, entry_only, field_kws):
-    tl = job["title"].lower()
-    if entry_only and any(m in tl for m in SENIOR): return 0, []
-    hay = f"{tl} {job.get('desc','').lower()}"
-    pts, hits = 0, []
-    for term,w in prof.items():
-        if term in hay:
-            pts += w*(4 if term in tl else 1)
-            if term in tl or w>=3: hits.append(term)
-    for kw in field_kws:
-        if kw in hay: pts += 20; hits.append(kw)
-    if entry_only and any(m in tl for m in JUNIOR): pts += 25
-    return pts, sorted(set(hits), key=len, reverse=True)[:8]
-
-
-# ═══════════════════════════════════════ CV parsing / tailoring
 SECTION_HEADS = ["education","skills","technical skills","soft skills",
                  "certification","certifications","experience","projects",
                  "summary","professional summary"]
@@ -376,7 +416,6 @@ SECTION_HEADS = ["education","skills","technical skills","soft skills",
 def parse_cv(text):
     lines = [l.rstrip() for l in text.split("\n")]
     cv = {"name":"", "headline":"", "contact":"", "sections":{}}
-
     for l in lines[:6]:
         s = l.strip()
         if s and s.isupper() and len(s.split()) <= 5 and not cv["name"]:
@@ -406,6 +445,305 @@ def parse_cv(text):
     cv["sections"].setdefault(cur, []).extend(buf)
     return cv
 
+
+def build_cv_profile(text):
+    """Weight by CV section, not word frequency. Skills > experience > certs."""
+    cv = parse_cv(text)
+    S = cv["sections"]
+    prof = {}
+
+    def add(chunk, base):
+        if not chunk: return
+        for g in _ngrams(chunk):
+            if g in SKILL_VOCAB:
+                prof[g] = max(prof.get(g,0), base+8)
+            elif " " not in g and len(g) >= 4 \
+                 and g not in NOISE and g not in STOPWORDS:
+                prof[g] = max(prof.get(g,0), base)
+
+    for line in (S.get("skills",[]) + S.get("technical skills",[]) +
+                 S.get("soft skills",[])):
+        for part in re.split(r"[,\u2022•|/]", line):
+            p = part.strip().lower()
+            if 2 < len(p) < 45 and p not in NOISE:
+                prof[p] = 10
+                for g in _ngrams(p):
+                    if g in SKILL_VOCAB: prof[g] = 12
+
+    add(" ".join(S.get("experience",[]) + S.get("projects",[])), 6)
+    add(" ".join(S.get("certification",[]) + S.get("certifications",[])), 4)
+
+    for k in detect_field(text)[1]:
+        prof[k] = 9
+
+    return dict(sorted(prof.items(), key=lambda x:-x[1])[:80])
+
+
+# ═══════════════════════════════════════ persistence
+def _load(path, default):
+    if os.path.exists(path):
+        try: return json.load(open(path, encoding="utf-8"))
+        except Exception: pass
+    return default
+
+def _save(path, obj):
+    try: json.dump(obj, open(path,"w",encoding="utf-8"), ensure_ascii=False)
+    except Exception: pass
+
+def job_key(j):
+    return f"{j.get('company','')}|{j.get('title','').lower().strip()}"
+
+def load_cache(): return _load(JOBCACHE, {})
+def save_cache(c): _save(JOBCACHE, c)
+
+def cache_fresh(e):
+    try:
+        return datetime.now()-datetime.fromisoformat(e["ts"]) < timedelta(hours=CACHE_HOURS)
+    except Exception:
+        return False
+
+
+# ═══════════════════════════════════════ fetching
+def polite_sleep(): time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+
+def get(url, timeout=20):
+    try:
+        r = requests.get(url, timeout=timeout, headers=UA)
+        if r.status_code == 429:
+            time.sleep(60); return None
+        return r if r.status_code == 200 else None
+    except requests.RequestException:
+        return None
+
+def probe(slug):
+    for ats,tpl in PROBES.items():
+        r = get(tpl.format(s=slug), timeout=10)
+        if r:
+            try: d = r.json()
+            except Exception: continue
+            if isinstance(d,list) and d: return ats
+            if isinstance(d,dict):
+                for k in ("jobs","offers","content","results"):
+                    if d.get(k): return ats
+        time.sleep(0.4)
+    return None
+
+def fetch_ats(slug, ats):
+    out = []
+    try:
+        if ats=="lever":
+            r=get(f"https://api.lever.co/v0/postings/{slug}?mode=json")
+            for j in (r.json() if r else []):
+                out.append({"title":j.get("text",""),
+                    "location":(j.get("categories") or {}).get("location",""),
+                    "url":j.get("hostedUrl",""),
+                    "posted":(j.get("createdAt") and
+                              datetime.fromtimestamp(j["createdAt"]/1000).strftime("%Y-%m-%d")) or "",
+                    "desc":strip_html(j.get("descriptionPlain") or "")})
+        elif ats=="greenhouse":
+            r=get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true")
+            for j in (r.json().get("jobs",[]) if r else []):
+                out.append({"title":j.get("title",""),
+                    "location":(j.get("location") or {}).get("name",""),
+                    "url":j.get("absolute_url",""),
+                    "posted":(j.get("updated_at") or "")[:10],
+                    "desc":strip_html(j.get("content",""))})
+        elif ats=="ashby":
+            r=get(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
+            for j in (r.json().get("jobs",[]) if r else []):
+                out.append({"title":j.get("title",""),"location":j.get("location",""),
+                    "url":j.get("jobUrl",""),
+                    "posted":(j.get("publishedAt") or "")[:10],
+                    "desc":strip_html(j.get("descriptionPlain",""))})
+        elif ats=="recruitee":
+            r=get(f"https://{slug}.recruitee.com/api/offers/")
+            for j in (r.json().get("offers",[]) if r else []):
+                out.append({"title":j.get("title",""),"location":j.get("location",""),
+                    "url":j.get("careers_url",""),
+                    "posted":(j.get("published_at") or "")[:10],
+                    "desc":strip_html(j.get("description",""))})
+        elif ats=="workable":
+            r=get(f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true")
+            for j in (r.json().get("jobs",[]) if r else []):
+                out.append({"title":j.get("title",""),
+                    "location":j.get("location") or j.get("city",""),
+                    "url":j.get("url",""),
+                    "posted":(j.get("published_on") or "")[:10],
+                    "desc":strip_html(j.get("description",""))})
+        elif ats=="smartr":
+            r=get(f"https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100")
+            for j in (r.json().get("content",[]) if r else []):
+                loc=j.get("location") or {}
+                out.append({"title":j.get("name",""),
+                    "location":f"{loc.get('city','')} {loc.get('country','')}".strip(),
+                    "url":j.get("ref") or j.get("applyUrl",""),
+                    "posted":(j.get("releasedDate") or "")[:10],"desc":""})
+    except Exception:
+        pass
+    for j in out: j["company"]=slug
+    return out
+
+JOB_WORD = re.compile(r"(analyst|engineer|specialist|officer|developer|consultant|"
+    r"coordinator|administrator|architect|scientist|technician|associate|intern|"
+    r"trainee|graduate|advisor|auditor|designer|researcher)", re.I)
+
+SF_HINT = re.compile(r"locale=en_|/search|successfactors|rmkcdn|hr\.cloud\.sap", re.I)
+
+
+def fetch_site_browser(entities, progress=None):
+    """Render each careers page in a real browser and scrape job titles."""
+    from playwright.sync_api import sync_playwright
+
+    jobs_by_name, dead = {}, []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        ctx = browser.new_context(user_agent=UA["User-Agent"], locale="en-US",
+                                  viewport={"width":1366,"height":900})
+        page = ctx.new_page()
+        page.route("**/*", lambda r: r.abort()
+                   if r.request.resource_type in ("image","font","media","stylesheet")
+                   else r.continue_())
+
+        for idx,(name,url) in enumerate(entities):
+            found, seen = [], set()
+            tries = [url]
+            if SF_HINT.search(url) or url.rstrip("/").count("/") <= 2:
+                pr = urlparse(url)
+                tries.insert(0, f"{pr.scheme}://{pr.netloc}/search/?q=")
+
+            for attempt in tries:
+                try:
+                    page.goto(attempt, timeout=25000, wait_until="domcontentloaded")
+                    try: page.wait_for_load_state("networkidle", timeout=7000)
+                    except Exception: pass
+                    time.sleep(1.2)
+                    page.mouse.wheel(0, 3000)
+                    time.sleep(0.8)
+
+                    texts = page.eval_on_selector_all(
+                        "a, li, h2, h3, h4, td, .jobTitle, .job-title, "
+                        "[class*='job'], [class*='vacancy'], [id*='job']",
+                        "els => els.map(e => (e.innerText||'').trim())")
+
+                    for t in texts:
+                        t = re.sub(r"\s+"," ", t or "").strip()
+                        if (6 < len(t) < 90 and JOB_WORD.search(t)
+                                and t.lower() not in seen):
+                            seen.add(t.lower())
+                            found.append({"title":t,"location":"Saudi Arabia",
+                                          "url":page.url,"desc":"","posted":"",
+                                          "company":name})
+                    if found: break
+                except Exception:
+                    continue
+
+            if found: jobs_by_name[name] = found[:40]
+            else: dead.append(name)
+            if progress: progress(idx+1, len(entities), name)
+            time.sleep(random.uniform(1.0, 2.2))
+
+        browser.close()
+    return jobs_by_name, dead
+
+
+def fetch_site_plain(name, url):
+    r = get(url)
+    if not r: return []
+    out, seen = [], set()
+    for c in re.findall(r"<(?:a|li|h[2-4])[^>]*>(.*?)</(?:a|li|h[2-4])>",
+                        r.text, flags=re.S|re.I):
+        t = strip_html(c)
+        if 6 < len(t) < 90 and JOB_WORD.search(t) and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append({"title":t,"location":"Saudi Arabia","url":url,
+                        "desc":"","posted":"","company":name})
+    return out[:40]
+
+
+def fetch_jobspy(term, cities, all_saudi):
+    try:
+        from jobspy import scrape_jobs
+    except ImportError:
+        return [], "JobSpy not installed — run: pip install -U python-jobspy"
+    loc = "Saudi Arabia" if all_saudi else f"{cities[0]}, Saudi Arabia"
+    try:
+        df = scrape_jobs(site_name=["indeed","bayt"], search_term=term,
+                         location=loc, results_wanted=25, hours_old=168,
+                         country_indeed="Saudi Arabia")
+        out = []
+        for _,r in df.iterrows():
+            posted = r.get("date_posted")
+            out.append({"title":str(r.get("title") or ""),
+                        "location":str(r.get("location") or ""),
+                        "url":str(r.get("job_url") or ""),
+                        "posted":str(posted)[:10] if posted and str(posted)!="nan" else "",
+                        "desc":str(r.get("description") or "")[:4000],
+                        "company":str(r.get("company") or "board")})
+        return out, None
+    except Exception as e:
+        return [], f"JobSpy error: {e}"
+
+
+# ═══════════════════════════════════════ scoring
+def loc_ok(loc, chosen, all_saudi, keep_blank):
+    l = (loc or "").lower().strip()
+    if not l: return keep_blank
+    if all_saudi:
+        return (any(g in l for g in SAUDI_GENERIC)
+                or any(k in l for c in SAUDI_CITIES.values() for k in c))
+    return any(k in l for city in chosen for k in SAUDI_CITIES[city])
+
+
+def score(job, prof, entry_only, field_kws):
+    tl = job["title"].lower()
+    desc = (job.get("desc") or "").lower()
+    if entry_only and any(m in tl for m in SENIOR): return 0, [], []
+
+    pts, hits = 0, []
+    strong = [t for t,w in prof.items() if w >= 8]
+    for term, w in prof.items():
+        if _has(term, tl):
+            pts += w * 4; hits.append(term)
+        elif desc and _has(term, desc):
+            pts += w
+            if w >= 8: hits.append(term)
+
+    if not desc and pts:
+        pts = int(pts * 1.8)
+
+    if entry_only and any(m in tl for m in JUNIOR): pts += 25
+
+    hits = sorted(set(hits), key=len, reverse=True)
+    gaps = [t for t in strong if t not in hits][:6] if desc else []
+    return pts, hits[:8], gaps
+
+
+@st.cache_resource(show_spinner=False)
+def _embedder():
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def semantic_rerank(jobs, cv_text, weight=60):
+    """Blend keyword score with CV↔job meaning similarity. Local, no API."""
+    if not jobs or not cv_text:
+        return jobs
+    from sentence_transformers import util
+
+    m = _embedder()
+    cv_vec = m.encode(cv_text[:4000], convert_to_tensor=True,
+                      normalize_embeddings=True)
+    texts = [f"{j['title']}. {(j.get('desc') or '')[:900]}" for j in jobs]
+    job_vecs = m.encode(texts, convert_to_tensor=True,
+                        normalize_embeddings=True, batch_size=32)
+    sims = util.cos_sim(cv_vec, job_vecs)[0].tolist()
+    for j, s in zip(jobs, sims):
+        j["sim"] = round(max(s, 0.0), 3)
+        j["score"] = int(j["score"] + j["sim"] * weight)
+    return sorted(jobs, key=lambda x: -x["score"])
+
+
+# ═══════════════════════════════════════ CV tailoring
 def extract_bullets(lines):
     out = []
     for l in lines:
@@ -444,7 +782,6 @@ def tailor_bullet(b, kws):
 def build_tailored(cv, jd, target_title):
     kws = jd_keywords(jd)
     out = {"title": target_title, "keywords": kws}
-
     skills_lines = (cv["sections"].get("skills",[]) +
                     cv["sections"].get("technical skills",[]) +
                     cv["sections"].get("soft skills",[]))
@@ -583,11 +920,20 @@ with st.sidebar:
     entry_only = level == "Entry level"
 
     st.markdown("### 🔌 sources")
-    use_private = st.checkbox("Company ATS boards", value=True)
-    use_gov = st.checkbox("Government portals", value=True)
+    use_private = st.checkbox("Startup ATS boards (fast)", value=True)
+    use_gov = st.checkbox(f"Gov portals ({len(GOV_ENTITIES)})", value=True)
+    use_emp = st.checkbox(f"Top employers ({len(EMPLOYERS)})", value=False,
+                          help="Adds ~7 min on a cold run. Cached 12h after.")
+    use_browser = st.checkbox("Real browser (renders JS)", value=True)
     use_boards = st.checkbox("Indeed + Bayt", value=True,
                              help="LinkedIn excluded — it blocks hard.")
-    min_score = st.slider("Min match score", 0, 120, 15)
+
+    st.markdown("### 🧠 matching")
+    use_semantic = st.checkbox("Semantic re-rank", value=True,
+        help="Reads meaning, not just keywords. Runs locally, ~10s.")
+    only_new = st.checkbox("Only show new since last run", value=False)
+    min_score = st.slider("Min match score", 0, 200, 20)
+
     st.markdown("---")
     st.caption(f"Polite mode · {MIN_DELAY}–{MAX_DELAY}s delays · "
                f"{CACHE_HOURS}h cache · auto back-off on 429")
@@ -597,7 +943,7 @@ with st.sidebar:
 GAME_HTML = """
 <div style="font-family:system-ui;text-align:center;padding:2px">
  <div style="display:flex;justify-content:center;gap:14px;margin-bottom:6px;
-      font-weight:700;font-size:.8rem;color:#374151">
+      font-weight:600;font-size:.8rem;color:#4B5563">
    <span id="lvl">lvl 1/5</span><span id="mv">moves 0</span><span id="stars"></span>
  </div>
  <div id="tubes" style="display:flex;gap:9px;justify-content:center;
@@ -679,7 +1025,7 @@ $('rst').onclick=build;build();
 """
 
 # ═══════════════════════════════════════ tabs
-t_search, t_cv = st.tabs(["🔎 Find jobs", "📝 CV lab"])
+t_search, t_cv, t_track = st.tabs(["🔎 Find jobs", "📝 CV lab", "📋 Applications"])
 profile, cv_text, field, field_kws, label = None, "", None, [], ""
 
 with t_search:
@@ -693,7 +1039,7 @@ with t_search:
             if up:
                 cv_text = read_upload(up)
                 st.session_state["cv_text"] = cv_text
-                profile, label = build_profile(cv_text), "cv"
+                profile, label = build_cv_profile(cv_text), "cv"
                 field, field_kws = detect_field(cv_text)
                 st.success(f"Parsed {len(cv_text):,} chars")
                 if field:
@@ -724,111 +1070,233 @@ with t_search:
         if not all_saudi and not chosen:
             st.error("Pick a city."); st.stop()
 
-        employers = json.load(open(CACHE)) if os.path.exists(CACHE) else {}
+        employers_ats = _load(CACHE, {})
         jobcache = load_cache()
         results, dead, notes = [], [], []
         bar, status = st.progress(0.0), st.empty()
 
+        # ---- startup ATS APIs
         if use_private:
-            if not employers:
-                status.info("First run — probing company APIs. Go sort some balls.")
+            if not employers_ats:
+                status.info("First run — probing ATS APIs. Go sort some balls.")
                 for i,slug in enumerate(CANDIDATE_SLUGS):
                     a = probe(slug)
-                    if a: employers[slug]=a
-                    bar.progress((i+1)/len(CANDIDATE_SLUGS)*0.4)
+                    if a: employers_ats[slug]=a
+                    bar.progress((i+1)/len(CANDIDATE_SLUGS)*0.25)
                     polite_sleep()
-                json.dump(employers, open(CACHE,"w"), indent=2)
-            items = list(employers.items())
+                _save(CACHE, employers_ats)
+            items = list(employers_ats.items())
             for i,(slug,ats) in enumerate(items):
                 k=f"ats:{slug}"
                 if k in jobcache and cache_fresh(jobcache[k]):
-                    jobs=jobcache[k]["jobs"]; status.write(f"📦 {slug} (cached)")
+                    jobs=jobcache[k]["jobs"]
                 else:
                     status.write(f"🌐 {slug}…")
                     jobs=fetch_ats(slug,ats)
                     jobcache[k]={"ts":datetime.now().isoformat(),"jobs":jobs}
                     polite_sleep()
                 for j in jobs:
-                    if loc_ok(j["location"],chosen,all_saudi,keep_blank):
-                        p,h=score(j,profile,entry_only,field_kws)
+                    if loc_ok(j.get("location"),chosen,all_saudi,keep_blank):
+                        p,h,g=score(j,profile,entry_only,field_kws)
                         if p>=min_score:
-                            j["score"],j["matched"],j["src"]=p,", ".join(h),"ATS"
+                            j["score"],j["matched"],j["gaps"],j["src"]=p,h,g,"ATS"
                             results.append(j)
-                bar.progress(0.4+(i+1)/max(len(items),1)*0.25)
+                bar.progress(0.25+(i+1)/max(len(items),1)*0.1)
 
-        if use_gov:
-            items=list(GOV_ENTITIES.items())
-            for i,(name,url) in enumerate(items):
-                k=f"gov:{name}"
+        # ---- gov + employers
+        targets = []
+        if use_gov: targets += [("GOV",n,u) for n,u in GOV_ENTITIES.items()]
+        if use_emp: targets += [("EMP",n,u) for n,u in EMPLOYERS.items()]
+
+        if targets:
+            todo, cached_hits = [], []
+            for src,name,url in targets:
+                k=f"site:{name}"
                 if k in jobcache and cache_fresh(jobcache[k]):
-                    jobs=jobcache[k]["jobs"]
+                    for j in jobcache[k]["jobs"]:
+                        j["src"]=src; cached_hits.append(j)
                 else:
-                    status.write(f"🏛 {name}…")
-                    jobs=fetch_gov(name,url)
-                    jobcache[k]={"ts":datetime.now().isoformat(),"jobs":jobs}
-                    polite_sleep()
-                if not jobs: dead.append(name)
-                for j in jobs:
-                    p,h=score(j,profile,entry_only,field_kws)
-                    if p>=min_score:
-                        j["score"],j["matched"],j["src"]=p,", ".join(h),"GOV"
-                        results.append(j)
-                bar.progress(0.65+(i+1)/len(items)*0.2)
+                    todo.append((name,url,src))
 
+            fresh = {}
+            if todo:
+                srcmap = {n:s for n,_,s in todo}
+                pairs = [(n,u) for n,u,_ in todo]
+                if use_browser:
+                    status.write(f"🌐 Opening {len(pairs)} career portals…")
+                    def _prog(i,n,nm):
+                        status.write(f"🏛 {nm}  ({i}/{n})")
+                        bar.progress(0.35 + i/n*0.5)
+                    try:
+                        fresh, d2 = fetch_site_browser(pairs, _prog)
+                        dead.extend(d2)
+                    except ImportError:
+                        notes.append("Playwright missing — pip install playwright "
+                                     "&& python -m playwright install chromium")
+                        use_browser = False
+                    except Exception as e:
+                        notes.append(f"Browser mode failed ({e}); used plain fetch.")
+                        use_browser = False
+
+                if not use_browser:
+                    for i,(n,u) in enumerate(pairs):
+                        status.write(f"🏛 {n}…")
+                        got = fetch_site_plain(n,u)
+                        if got: fresh[n]=got
+                        else: dead.append(n)
+                        bar.progress(0.35+(i+1)/len(pairs)*0.5)
+                        polite_sleep()
+
+                for n,jl in fresh.items():
+                    for j in jl: j["src"] = srcmap.get(n,"GOV")
+                    jobcache[f"site:{n}"]={"ts":datetime.now().isoformat(),"jobs":jl}
+                for n,_ in pairs:
+                    if n not in fresh:
+                        jobcache[f"site:{n}"]={"ts":datetime.now().isoformat(),"jobs":[]}
+
+            for j in cached_hits + [x for jl in fresh.values() for x in jl]:
+                p,h,g = score(j, profile, entry_only, field_kws)
+                if p >= min_score:
+                    j["score"], j["matched"], j["gaps"] = p, h, g
+                    results.append(j)
+            bar.progress(0.87)
+
+        # ---- aggregators
         if use_boards:
-            term=list(profile)[0]
             status.write("🔍 Indeed + Bayt…")
-            jobs,err=fetch_jobspy(term, chosen or ["Riyadh"], all_saudi)
+            jobs,err = fetch_jobspy(list(profile)[0], chosen or ["Riyadh"], all_saudi)
             if err: notes.append(err)
             for j in jobs:
-                if loc_ok(j["location"],chosen,all_saudi,True):
-                    p,h=score(j,profile,entry_only,field_kws)
+                if loc_ok(j.get("location"),chosen,all_saudi,True):
+                    p,h,g=score(j,profile,entry_only,field_kws)
                     if p>=min_score:
-                        j["score"],j["matched"],j["src"]=p,", ".join(h),"BOARD"
+                        j["score"],j["matched"],j["gaps"],j["src"]=p,h,g,"BOARD"
                         results.append(j)
-            bar.progress(0.95)
+            bar.progress(0.94)
 
-        save_cache(jobcache); bar.progress(1.0); status.empty()
+        save_cache(jobcache)
 
+        # ---- dedupe
         seen,uniq=set(),[]
         for j in sorted(results,key=lambda x:-x["score"]):
-            if j["url"] not in seen: seen.add(j["url"]); uniq.append(j)
-        st.session_state["results"]=uniq
+            key=(j["title"].lower(), j.get("company",""))
+            if key not in seen: seen.add(key); uniq.append(j)
 
-        st.markdown(f"## 🎯 {len(uniq)} matches — {random.choice(HYPE)}")
-        if not uniq:
-            st.warning("Nothing. Lower min score, add cities, or try 'Experienced'.")
+        # ---- semantic re-rank
+        if use_semantic and label == "cv" and st.session_state.get("cv_text"):
+            try:
+                status.write("🧠 Re-ranking by meaning…")
+                uniq = semantic_rerank(uniq, st.session_state["cv_text"])
+            except Exception as e:
+                notes.append(f"Semantic re-rank skipped: {e}")
 
+        # ---- new-since-last-run
+        seen_db = _load(SEENFILE, {})
+        now_iso = datetime.now().isoformat()
+        n_new = 0
         for j in uniq:
-            bd={"ATS":"b-green","GOV":"b-blue","BOARD":"b-pink"}[j["src"]]
-            chips="".join(f'<span class="badge b-gray">{m}</span>'
-                          for m in j["matched"].split(", ") if m)
+            k = job_key(j)
+            if k in seen_db:
+                j["is_new"] = False
+                j["first_seen"] = seen_db[k]
+            else:
+                j["is_new"] = True; j["first_seen"] = now_iso; n_new += 1
+            seen_db[k] = j["first_seen"]
+        _save(SEENFILE, seen_db)
+
+        bar.progress(1.0); status.empty()
+
+        shown = [j for j in uniq if j["is_new"]] if only_new else uniq
+
+        c1,c2,c3 = st.columns(3)
+        c1.metric("Matches", len(uniq))
+        c2.metric("New since last run", n_new)
+        c3.metric("Showing", len(shown))
+        st.markdown(f"#### {random.choice(HYPE)}")
+
+        if not shown:
+            st.warning("Nothing to show. Lower min score, widen cities, "
+                       "untick 'only new', or try 'Experienced'.")
+
+        for j in shown:
+            bd={"ATS":"b-green","GOV":"b-blue","EMP":"b-amber",
+                "BOARD":"b-pink"}.get(j.get("src"),"b-gray")
+            newbadge = '<span class="badge b-new">NEW</span>' if j.get("is_new") else ''
+            posted = (f'<span class="badge b-gray">📅 {j["posted"]}</span>'
+                      if j.get("posted") else '')
+            chips = "".join(f'<span class="badge b-gray">{m}</span>'
+                            for m in j.get("matched",[]))
+            gapline = ""
+            if j.get("gaps"):
+                total = len(j["matched"]) + len(j["gaps"])
+                gapline = (f'<div style="margin-top:8px;font-size:.8rem;color:#6B7280">'
+                           f'Matches {len(j["matched"])} of {total} key skills · '
+                           f'missing: ' +
+                           " ".join(f'<span class="badge b-red">{g}</span>'
+                                    for g in j["gaps"]) + '</div>')
+            fit = int(j.get("sim",0)*100)
+            fitbar = (f'<div class="fitbar"><div class="fitfill" '
+                      f'style="width:{fit}%"></div></div>'
+                      f'<div style="font-size:.7rem;color:#9CA3AF;margin-top:3px">'
+                      f'{fit}% semantic fit</div>') if j.get("sim") else ''
+
             st.markdown(f"""<div class="jobcard">
-              <div style="display:flex;justify-content:space-between">
+              <div style="display:flex;justify-content:space-between;gap:12px">
                 <div style="flex:1">
-                  <div style="font-size:1.1rem;font-weight:700">{j['title']}</div>
-                  <div style="color:#6B7280;font-size:.85rem;margin:3px 0 7px">
-                    {j['company']} · {j['location'] or 'n/a'}
-                    <span class="badge {bd}">{j['src']}</span></div>
-                  {chips}</div>
-                <div style="font-size:1.55rem;font-weight:700;color:#A855F7">
-                  {j['score']}</div></div>
-              <div style="margin-top:8px"><a href="{j['url']}" target="_blank"
-                style="font-weight:700;color:#3B82F6">open posting ↗</a></div>
+                  <div style="font-size:1.08rem;font-weight:700;line-height:1.3">
+                    {j['title']} {newbadge}</div>
+                  <div style="color:#6B7280;font-size:.84rem;margin:4px 0 8px">
+                    {j.get('company','')} · {j.get('location') or 'location n/a'}
+                    <span class="badge {bd}">{j.get('src','')}</span> {posted}</div>
+                  {chips}{gapline}</div>
+                <div style="text-align:right;min-width:66px">
+                  <div style="font-size:1.5rem;font-weight:700;color:#A855F7">
+                    {j['score']}</div>
+                  <div style="font-size:.66rem;color:#9CA3AF">score</div></div>
+              </div>
+              {fitbar}
+              <div style="margin-top:10px"><a href="{j['url']}" target="_blank"
+                style="font-weight:600;color:#3B82F6;text-decoration:none">
+                open posting ↗</a></div>
             </div>""", unsafe_allow_html=True)
 
-        if uniq:
+        if shown:
             import csv as _csv
             b=io.StringIO(); w=_csv.writer(b)
-            w.writerow(["score","source","company","title","location","matched","url"])
-            for j in uniq:
-                w.writerow([j["score"],j["src"],j["company"],j["title"],
-                            j["location"],j["matched"],j["url"]])
-            st.download_button("⬇ CSV", b.getvalue(),
+            w.writerow(["score","fit%","new","source","company","title",
+                        "location","posted","matched","gaps","url"])
+            for j in shown:
+                w.writerow([j["score"], int(j.get("sim",0)*100),
+                            "YES" if j.get("is_new") else "",
+                            j.get("src",""), j.get("company",""), j["title"],
+                            j.get("location",""), j.get("posted",""),
+                            ", ".join(j.get("matched",[])),
+                            ", ".join(j.get("gaps",[])), j["url"]])
+            st.download_button("⬇ Download CSV", b.getvalue(),
                 f"luluty_{datetime.now():%Y-%m-%d}.csv","text/csv")
+
+            with st.expander("➕ Add jobs to the application tracker"):
+                picks = st.multiselect("Which ones did you apply to?",
+                    [f"{j['title']} — {j.get('company','')}" for j in shown[:40]])
+                if st.button("Save to tracker") and picks:
+                    apps = _load(TRACKFILE, [])
+                    have = {(a["title"], a["company"]) for a in apps}
+                    for j in shown:
+                        lbl = f"{j['title']} — {j.get('company','')}"
+                        if lbl in picks and (j["title"], j.get("company","")) not in have:
+                            apps.append({"title":j["title"],
+                                         "company":j.get("company",""),
+                                         "url":j["url"], "status":"Applied",
+                                         "date":datetime.now().strftime("%Y-%m-%d"),
+                                         "notes":""})
+                    _save(TRACKFILE, apps)
+                    st.success(f"Added {len(picks)}. See the Applications tab.")
+
         if dead:
-            st.info("No readable listings from: "+", ".join(dead)+
-                    " — JavaScript-rendered or login-walled. Open manually.")
+            with st.expander(f"⚠ {len(dead)} portals returned nothing"):
+                st.write(", ".join(dead))
+                st.caption("No openings, JS the scraper can't reach, or a login "
+                           "wall. Worth opening manually.")
         for n in notes: st.warning(n)
 
 
@@ -902,3 +1370,55 @@ with t_cv:
             """)
     else:
         st.info("Load a CV and paste a JD to generate a tailored version.")
+
+
+# ═══════════════════════════════════════ TRACKER
+with t_track:
+    st.markdown("### 📋 Applications")
+    apps = _load(TRACKFILE, [])
+
+    if not apps:
+        st.info("Nothing tracked yet. Run a search, then use "
+                "'Add jobs to the application tracker' under the results.")
+    else:
+        counts = Counter(a.get("status","Applied") for a in apps)
+        cols = st.columns(5)
+        for c,(lbl,key) in zip(cols, [("Total",None),("Applied","Applied"),
+                ("Interview","Interview"),("Offer","Offer"),("Rejected","Rejected")]):
+            c.metric(lbl, len(apps) if key is None else counts.get(key,0))
+
+        st.markdown("")
+        STATUSES = ["Applied","Follow up","Interview","Offer","Rejected","Closed"]
+        changed = False
+        for i,a in enumerate(apps):
+            with st.container(border=True):
+                c1,c2,c3 = st.columns([4,2,1])
+                with c1:
+                    st.markdown(f"**{a['title']}**")
+                    st.caption(f"{a['company']} · applied {a['date']}")
+                    if a.get("url"): st.link_button("Open posting", a["url"])
+                with c2:
+                    ns = st.selectbox("Status", STATUSES,
+                        index=STATUSES.index(a.get("status","Applied"))
+                              if a.get("status","Applied") in STATUSES else 0,
+                        key=f"st{i}", label_visibility="collapsed")
+                    if ns != a.get("status"): a["status"]=ns; changed=True
+                    nn = st.text_input("Notes", a.get("notes",""),
+                        key=f"nt{i}", placeholder="notes…",
+                        label_visibility="collapsed")
+                    if nn != a.get("notes",""): a["notes"]=nn; changed=True
+                with c3:
+                    if st.button("🗑", key=f"dl{i}"):
+                        apps.pop(i); _save(TRACKFILE, apps); st.rerun()
+        if changed:
+            _save(TRACKFILE, apps)
+
+        st.markdown("")
+        import csv as _csv2
+        b=io.StringIO(); w=_csv2.writer(b)
+        w.writerow(["date","company","title","status","notes","url"])
+        for a in apps:
+            w.writerow([a["date"],a["company"],a["title"],
+                        a.get("status",""),a.get("notes",""),a.get("url","")])
+        st.download_button("⬇ Export tracker", b.getvalue(),
+                           "applications.csv","text/csv")
